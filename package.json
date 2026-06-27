@@ -1,0 +1,28 @@
+{
+  "name": "smart_bookings",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm --workspace backend test",
+    "build": "npm --workspace frontend run build",
+    "lint": "npm --workspace frontend run lint && npm --workspace backend run lint"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sahanaa21/Smart_Bookings.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Sahanaa21/Smart_Bookings/issues"
+  },
+  "homepage": "https://github.com/Sahanaa21/Smart_Bookings#readme",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ]
+}
