@@ -19,6 +19,7 @@ const {
 } = require('../services/bookingService');
 const { createNotification } = require('../services/notificationService');
 const { logAudit } = require('../utils/audit');
+const { toSafeString, toSafeObjectId } = require('../utils/sanitize');
 
 const router = express.Router();
 router.use(auth);
@@ -28,8 +29,14 @@ router.get(
   [query('date').notEmpty(), query('startTime').notEmpty(), query('endTime').notEmpty(), query('attendeesCount').isInt({ min: 1 })],
   validate,
   async (req, res) => {
-    const { date, startTime, endTime } = req.query;
+    const date = toSafeString(req.query.date, { maxLength: 10, pattern: /^\d{4}-\d{2}-\d{2}$/ });
+    const startTime = toSafeString(req.query.startTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ });
+    const endTime = toSafeString(req.query.endTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ });
     const attendeesCount = Number(req.query.attendeesCount);
+
+    if (!date || !startTime || !endTime || Number.isNaN(attendeesCount)) {
+      return res.status(400).json({ message: 'Invalid availability input' });
+    }
 
     const activeResources = await Resource.find({ status: 'Active', capacity: { $gte: attendeesCount } }).lean();
     const booked = await Booking.find({
@@ -65,10 +72,13 @@ router.get(
 );
 
 router.get('/', async (req, res) => {
-  const { date, status, resourceId } = req.query;
+  const date = toSafeString(req.query.date, { maxLength: 10, pattern: /^\d{4}-\d{2}-\d{2}$/ });
+  const status = toSafeString(req.query.status, { maxLength: 20 });
+  const resourceId = toSafeObjectId(req.query.resourceId);
+
   const queryFilter = {};
   if (date) queryFilter.date = date;
-  if (status) queryFilter.status = status;
+  if (status && Object.values(BOOKING_STATUS).includes(status)) queryFilter.status = status;
   if (resourceId) queryFilter.resourceId = resourceId;
 
   const bookings = await Booking.find(queryFilter)
@@ -92,17 +102,28 @@ router.post(
   ],
   validate,
   async (req, res) => {
-    const resource = await Resource.findById(req.body.resourceId).lean();
+    const resourceId = toSafeObjectId(req.body.resourceId);
+    const date = toSafeString(req.body.date, { maxLength: 10, pattern: /^\d{4}-\d{2}-\d{2}$/ });
+    const startTime = toSafeString(req.body.startTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ });
+    const endTime = toSafeString(req.body.endTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ });
+    const purpose = toSafeString(req.body.purpose, { maxLength: 200 });
+    const overrideReason = toSafeString(req.body.overrideReason, { maxLength: 200 });
+    const attendeesCount = Number(req.body.attendeesCount);
+    if (!resourceId || !date || !startTime || !endTime || !purpose || Number.isNaN(attendeesCount)) {
+      return res.status(400).json({ message: 'Invalid booking input' });
+    }
+
+    const resource = await Resource.findById(resourceId).lean();
     if (!resource || resource.status !== 'Active') {
       return res.status(400).json({ message: 'Selected resource is unavailable' });
     }
-    if (req.body.attendeesCount > resource.capacity) {
+    if (attendeesCount > resource.capacity) {
       return res.status(400).json({ message: 'Attendees exceed resource capacity' });
     }
 
-    const conflicting = await getConflictingBooking(req.body);
+    const conflicting = await getConflictingBooking({ resourceId, date, startTime, endTime });
 
-    if (isConflict(conflicting, req.body.startTime, req.body.endTime)) {
+    if (isConflict(conflicting, startTime, endTime)) {
       const existingBookingUser = await User.findById(conflicting.userId).lean();
       const currentPriority = await getPriorityValue(req.user.role);
       const existingPriority = await getPriorityValue(existingBookingUser?.role);
@@ -110,26 +131,26 @@ router.post(
       if (!(currentPriority < existingPriority && canOverrideRole(req.user.role))) {
         const alternatives = await suggestAlternativeResources({
           resourceType: resource.type,
-          attendeesCount: req.body.attendeesCount,
+          attendeesCount,
           excludeResourceId: resource._id,
         });
         return res.status(409).json({ message: 'Time slot already booked', alternatives });
       }
 
-      if (!req.body.overrideReason) {
+      if (!overrideReason) {
         return res.status(400).json({ message: 'Override reason is mandatory' });
       }
 
       await Booking.findByIdAndUpdate(conflicting._id, {
         status: BOOKING_STATUS.OVERRIDDEN,
         overriddenBy: req.user._id,
-        overrideReason: req.body.overrideReason,
+        overrideReason,
       });
 
       await createNotification({
         userId: conflicting.userId,
         title: 'Booking overridden',
-        message: `Your booking for ${resource.name} was overridden. Reason: ${req.body.overrideReason}`,
+        message: `Your booking for ${resource.name} was overridden. Reason: ${overrideReason}`,
       });
 
       await createBookingHistory(
@@ -138,13 +159,19 @@ router.post(
         req.user._id,
         { status: conflicting.status },
         { status: BOOKING_STATUS.OVERRIDDEN },
-        req.body.overrideReason
+        overrideReason
       );
     }
 
     const status = await getApprovalStatus(resource);
     const booking = await Booking.create({
-      ...req.body,
+      resourceId,
+      date,
+      startTime,
+      endTime,
+      attendeesCount,
+      purpose,
+      facilitiesRequired: Array.isArray(req.body.facilitiesRequired) ? req.body.facilitiesRequired : [],
       userId: req.user._id,
       department: req.user.department,
       status,
@@ -164,7 +191,10 @@ router.patch(
   [body('status').isIn(Object.values(BOOKING_STATUS))],
   validate,
   async (req, res) => {
-    const booking = await Booking.findById(req.params.id);
+    const bookingId = toSafeObjectId(req.params.id);
+    if (!bookingId) return res.status(400).json({ message: 'Invalid booking id' });
+
+    const booking = await Booking.findById(bookingId);
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
     const oldValue = { status: booking.status };
     booking.status = req.body.status;
@@ -195,7 +225,10 @@ router.patch(
 );
 
 router.post('/:id/check-in', async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
+  const bookingId = toSafeObjectId(req.params.id);
+  if (!bookingId) return res.status(400).json({ message: 'Invalid booking id' });
+
+  const booking = await Booking.findById(bookingId);
   if (!booking) return res.status(404).json({ message: 'Booking not found' });
   if (String(booking.userId) !== String(req.user._id) && req.user.role !== ROLES.SUPER_ADMIN) {
     return res.status(403).json({ message: 'Only booking owner can check in' });

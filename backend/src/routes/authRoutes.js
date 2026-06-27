@@ -7,6 +7,7 @@ const validate = require('../middlewares/validate');
 const auth = require('../middlewares/auth');
 const { signToken } = require('../utils/jwt');
 const { logAudit } = require('../utils/audit');
+const { toSafeString } = require('../utils/sanitize');
 
 const router = express.Router();
 
@@ -15,7 +16,9 @@ router.post(
   [body('employeeId').notEmpty(), body('password').notEmpty()],
   validate,
   async (req, res) => {
-    const { employeeId, password } = req.body;
+    const employeeId = toSafeString(req.body.employeeId, { maxLength: 30, pattern: /^[A-Za-z0-9_-]+$/ });
+    const password = toSafeString(req.body.password, { maxLength: 100 });
+    if (!employeeId || !password) return res.status(400).json({ message: 'Invalid credentials format' });
     const user = await User.findOne({ employeeId });
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -67,7 +70,9 @@ router.post(
 );
 
 router.post('/request-password-reset', [body('employeeId').notEmpty()], validate, async (req, res) => {
-  const user = await User.findOne({ employeeId: req.body.employeeId });
+  const employeeId = toSafeString(req.body.employeeId, { maxLength: 30, pattern: /^[A-Za-z0-9_-]+$/ });
+  if (!employeeId) return res.json({ message: 'If the account exists, reset instructions are generated.' });
+  const user = await User.findOne({ employeeId });
   if (user) {
     user.passwordResetToken = crypto.randomBytes(16).toString('hex');
     user.passwordResetExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
@@ -81,7 +86,12 @@ router.post(
   [body('employeeId').notEmpty(), body('token').notEmpty(), body('newPassword').isLength({ min: 8 })],
   validate,
   async (req, res) => {
-    const { employeeId, token, newPassword } = req.body;
+    const employeeId = toSafeString(req.body.employeeId, { maxLength: 30, pattern: /^[A-Za-z0-9_-]+$/ });
+    const token = toSafeString(req.body.token, { maxLength: 128, pattern: /^[A-Fa-f0-9]+$/ });
+    const newPassword = toSafeString(req.body.newPassword, { maxLength: 100 });
+    if (!employeeId || !token || !newPassword) {
+      return res.status(400).json({ message: 'Invalid input' });
+    }
     const user = await User.findOne({
       employeeId,
       passwordResetToken: token,

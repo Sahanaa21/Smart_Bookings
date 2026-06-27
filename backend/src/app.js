@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
@@ -26,6 +27,7 @@ app.use(
 );
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use(mongoSanitize());
 app.use(morgan('tiny'));
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

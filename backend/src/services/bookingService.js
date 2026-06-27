@@ -4,6 +4,7 @@ const Resource = require('../models/Resource');
 const BookingHistory = require('../models/BookingHistory');
 const { BOOKING_STATUS, ROLES } = require('../utils/constants');
 const { getPriorityHierarchy, getSetting } = require('./settingsService');
+const { toSafeObjectId, toSafeString } = require('../utils/sanitize');
 
 const toMinutes = (time) => {
   const [hours, minutes] = time.split(':').map(Number);
@@ -15,8 +16,10 @@ const hasTimeOverlap = (startA, endA, startB, endB) =>
 
 const getConflictingBooking = async ({ resourceId, date, startTime, endTime }) =>
   Booking.findOne({
-    resourceId,
-    date,
+    resourceId: toSafeObjectId(resourceId),
+    date: toSafeString(date, { maxLength: 10, pattern: /^\d{4}-\d{2}-\d{2}$/ }),
+    startTime: { $lt: toSafeString(endTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ }) },
+    endTime: { $gt: toSafeString(startTime, { maxLength: 5, pattern: /^\d{2}:\d{2}$/ }) },
     status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.APPROVED] },
   }).lean();
 
